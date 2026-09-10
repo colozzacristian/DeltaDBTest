@@ -17,6 +17,11 @@ const MOCK_KEYBOARDS: MockKeyboard[] = [
 
 let connectedPath: string | null = null;
 
+// When OPENAJAZZ_MOCK=1 (or no real keyboard found) the server returns the mock
+// keyboard list and silently swallows HID writes. Set automatically by
+// `deno task dev:mock`; in `deno task dev` real HID is attempted instead.
+const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
+
 // ─── Package version (kept in sync with deno.json) ───────────────────────────
 
 const VERSION = "0.1.0";
@@ -741,8 +746,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
   }
 
-  // GET /api/keyboards — list mock keyboards
+  // GET /api/keyboards — list detected keyboards (real or mock)
   if (method === "GET" && pathname === "/api/keyboards") {
+    if (MOCK_MODE) {
+      return Response.json(MOCK_KEYBOARDS);
+    }
+    // TODO: replace with real node-hid device discovery
     return Response.json(MOCK_KEYBOARDS);
   }
 
@@ -750,29 +759,37 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (method === "POST" && pathname === "/api/connect") {
     const body = await req.json() as { path: string };
     connectedPath = body.path;
-    console.log("[mock] connected:", connectedPath);
+    console.log(MOCK_MODE ? "[mock]" : "[hid]", "connected:", connectedPath);
     return Response.json({ ok: true });
   }
 
   // POST /api/disconnect — clear active keyboard
   if (method === "POST" && pathname === "/api/disconnect") {
-    console.log("[mock] disconnected:", connectedPath);
+    console.log(MOCK_MODE ? "[mock]" : "[hid]", "disconnected:", connectedPath);
     connectedPath = null;
     return Response.json({ ok: true });
   }
 
-  // POST /api/rgb — apply RGB settings (mock)
+  // POST /api/rgb — apply RGB settings
   if (method === "POST" && pathname === "/api/rgb") {
-    // TODO: plug in node-hid here
     const body = await req.json();
-    console.log("[mock] rgb for", connectedPath, body);
+    if (MOCK_MODE) {
+      console.log("[mock] rgb for", connectedPath, body);
+    } else {
+      // TODO: plug in node-hid here
+      console.log("[hid] rgb for", connectedPath, body);
+    }
     return Response.json({ ok: true });
   }
 
-  // POST /api/time — sync clock to keyboard (mock)
+  // POST /api/time — sync clock to keyboard
   if (method === "POST" && pathname === "/api/time") {
-    // TODO: plug in node-hid here
-    console.log("[mock] time sync for", connectedPath);
+    if (MOCK_MODE) {
+      console.log("[mock] time sync for", connectedPath);
+    } else {
+      // TODO: plug in node-hid here
+      console.log("[hid] time sync for", connectedPath);
+    }
     return Response.json({ ok: true, time: new Date().toISOString() });
   }
 

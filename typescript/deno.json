@@ -7,8 +7,10 @@
     "lib": ["deno.window", "dom"]
   },
   "tasks": {
-    "dev": "deno desktop --hmr app.ts",
-    "build": "deno desktop app.ts"
+    "dev": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --hmr app.ts",
+    "dev:real": "deno desktop --allow-env --allow-read --hmr app.ts",
+    "build": "deno desktop --allow-env app.ts",
+    "build:mock": "OPENAJAZZ_MOCK=1 deno desktop --allow-env app.ts"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@1"
