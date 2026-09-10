@@ -2,10 +2,10 @@ name: Build
 
 on:
   push:
-    branches: [cli]
+    branches: [cli, main]
     tags: ["v*"]
   pull_request:
-    branches: [cli]
+    branches: [cli, main]
 
 permissions:
   contents: write # needed to publish GitHub Releases on tag pushes
