@@ -1,1 +1,8 @@
 app/
+node_modules/
+
+# deno desktop build artifacts
+*.msi
+*.AppImage
+*.so
+app.so
