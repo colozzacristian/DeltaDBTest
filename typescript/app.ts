@@ -751,8 +751,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if (MOCK_MODE) {
       return Response.json(MOCK_KEYBOARDS);
     }
-    // TODO: replace with real node-hid device discovery
-    return Response.json(MOCK_KEYBOARDS);
+    // TODO: use node-hid to scan for supported keyboards and return them here.
+    // For now, real mode returns an empty list until HID discovery is implemented.
+    return Response.json([]);
   }
 
   // POST /api/connect — set active keyboard
