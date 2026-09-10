@@ -15,8 +15,11 @@ const html = `<!DOCTYPE html>
   <title>Openajazz</title>
   <style>
     body { font-family: sans-serif; padding: 2rem; background: #1e1e1e; color: #fff; }
-    button { padding: 0.5rem 1rem; cursor: pointer; }
+    button { padding: 0.5rem 1rem; cursor: pointer; margin-right: 0.5rem; }
     #status { margin-top: 1rem; color: #aaa; }
+    .form-group { margin-bottom: 1rem; }
+    label { display: block; margin-bottom: 0.25rem; }
+    select, input { padding: 0.25rem; }
   </style>
 </head>
 <body>
@@ -25,10 +28,20 @@ const html = `<!DOCTYPE html>
   <div id="status">Not connected</div>
   
   <div id="controls" style="display:none; margin-top: 2rem;">
-    <button id="red">Set Red</button>
-    <button id="blue">Set Blue</button>
+    <h2>RGB Controls</h2>
+    <div class="form-group">
+      <label for="color">Color:</label>
+      <input type="color" id="color" value="#ff0000">
+    </div>
+    
+    <div class="form-group">
+      <button id="applyColor">Apply Color</button>
+      <button id="applyRainbow">Set Rainbow</button>
+    </div>
   </div>
 
+  <!-- We load our library logic here so we can use WebHID natively in the browser -->
+  <!-- Note: In a real app we'd bundle this or serve the JS from Deno.serve. -->
   <script type="module">
     // Simplified desktop client script using WebHID
     document.getElementById('connect').addEventListener('click', async () => {
@@ -47,16 +60,23 @@ const html = `<!DOCTYPE html>
           document.getElementById('controls').style.display = 'block';
           
           window.activeDevice = device;
+          
+          // Let the Deno backend know (optional)
+          fetch('/connect', { method: 'POST' });
         }
       } catch (e) {
         document.getElementById('status').innerText = 'Error: ' + e.message;
       }
     });
 
-    document.getElementById('red').addEventListener('click', async () => {
-       // Send an IPC message or direct HID commands depending on architecture
-       // Currently, WebHID might need a backend relay or just execute directly here if permitted.
-       document.getElementById('status').innerText = 'Setting red... (Needs bindings export)';
+    document.getElementById('applyColor').addEventListener('click', async () => {
+       const colorHex = document.getElementById('color').value;
+       document.getElementById('status').innerText = \`Setting color to \${colorHex}... (Implement IPC or Client-Side WebHID)\`;
+       // In a full desktop framework we would use Deno bindings here or fetch() to tell Deno to write to node-hid.
+    });
+
+    document.getElementById('applyRainbow').addEventListener('click', async () => {
+       document.getElementById('status').innerText = \`Setting rainbow... (Implement IPC or Client-Side WebHID)\`;
     });
   </script>
 </body>
