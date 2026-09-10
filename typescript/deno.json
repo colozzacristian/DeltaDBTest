@@ -12,6 +12,7 @@
     "strict": true,
     "lib": ["deno.window", "dom"]
   },
+  "nodeModulesDir": "auto",
   "tasks": {
     "dev": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --hmr app.ts",
     "dev:real": "deno desktop --allow-env --allow-read --hmr app.ts",

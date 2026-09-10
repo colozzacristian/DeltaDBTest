@@ -2,10 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [cli, main]
     tags: ["v*"]
   pull_request:
-    branches: [cli, main]
+    branches: [main]
 
 permissions:
   contents: write # needed to publish GitHub Releases on tag pushes
@@ -76,7 +75,9 @@ jobs:
       - name: Build ${{ matrix.name }}
         run: |
           cd typescript
-          deno desktop --allow-env \
+          deno desktop --allow-env --allow-read \
+            --node-modules-dir=auto \
+            --allow-scripts=npm:node-hid \
             --backend ${{ matrix.backend }} \
             --target ${{ matrix.target }} \
             --output ${{ matrix.output }} \

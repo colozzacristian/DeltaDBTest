@@ -1,3 +1,143 @@
+// deno-lint-ignore-file no-explicit-any
+import HID from "npm:node-hid";
+import {
+  Brightness,
+  Color,
+  Direction,
+  Effect,
+  Keyboard,
+  Rgb,
+  Speed,
+  createKeyboard,
+  writeRgbInto,
+  writeTimeSyncInto,
+} from "./src/index.ts";
+import {
+  NodeHIDFeatureDevice,
+  NodeHIDOutputDevice,
+  openFeatureDevice,
+  openOutputDevice,
+} from "./src/nodehid.ts";
+
+// ─── Supported keyboard definitions (for real HID discovery) ─────────────────
+
+const SUPPORTED = [
+  {
+    vendorId: 0x320F,
+    productId: 0x505B,
+    usagePage: 0xFF1C,
+    name: "AK820",
+    manufacturer: "AJAZZ",
+    kind: "ak820",
+    features: { rgb: true, timeSync: false },
+    reportType: "output" as const,
+  },
+  {
+    vendorId: 0x0c45,
+    productId: 0x8009,
+    usagePage: 0xff13,
+    name: "AK35I",
+    manufacturer: "AJAZZ",
+    kind: "ak35i",
+    features: { rgb: true, timeSync: true },
+    reportType: "feature" as const,
+  },
+  {
+    vendorId: 0x0c45,
+    productId: 0x800a,
+    usagePage: 0xff13,
+    name: "F75 Max",
+    manufacturer: "Aula",
+    kind: "f75_max",
+    features: { rgb: true, timeSync: true },
+    reportType: "feature" as const,
+  },
+];
+
+// ─── Real keyboard state ──────────────────────────────────────────────────────
+
+interface OpenKeyboard {
+  keyboard: Keyboard;
+  device: NodeHIDOutputDevice | NodeHIDFeatureDevice;
+}
+
+let openKeyboard: OpenKeyboard | null = null;
+
+function discoverKeyboards() {
+  const all = (HID as any).devices() as any[];
+  return SUPPORTED.flatMap((s) =>
+    all
+      .filter(
+        (d) =>
+          d.vendorId === s.vendorId &&
+          d.productId === s.productId &&
+          d.usagePage === s.usagePage &&
+          d.path,
+      )
+      .map((d) => ({
+        path: d.path as string,
+        name: s.name,
+        manufacturer: s.manufacturer,
+        kind: s.kind,
+        features: s.features,
+        mock: false,
+      }))
+  );
+}
+
+function connectReal(path: string): void {
+  if (openKeyboard) {
+    try { openKeyboard.device.close(); } catch { /* ignore */ }
+    openKeyboard = null;
+  }
+
+  const all = (HID as any).devices() as any[];
+  const info = all.find((d: any) => d.path === path);
+  if (!info) throw new Error(`Device not found: ${path}`);
+
+  const supported = SUPPORTED.find(
+    (s) =>
+      s.vendorId === info.vendorId &&
+      s.productId === info.productId &&
+      s.usagePage === info.usagePage,
+  );
+  if (!supported) throw new Error(`Unsupported keyboard at ${path}`);
+
+  const device = supported.reportType === "output"
+    ? openOutputDevice(path)
+    : openFeatureDevice(path);
+
+  const keyboard = createKeyboard(
+    info.vendorId,
+    info.productId,
+    info.usagePage,
+    device,
+  );
+  if (!keyboard) throw new Error("createKeyboard returned null");
+
+  openKeyboard = { keyboard, device };
+}
+
+function parseRgb(
+  body: { color: string; rainbow: boolean; effect: string; brightness: number; speed: number; direction: number },
+): Rgb {
+  const color: Color = body.rainbow
+    ? { type: "rainbow" }
+    : {
+      type: "rgb",
+      r: parseInt(body.color.slice(1, 3), 16),
+      g: parseInt(body.color.slice(3, 5), 16),
+      b: parseInt(body.color.slice(5, 7), 16),
+    };
+  return {
+    color,
+    effect: body.effect as Effect,
+    brightness: body.brightness as Brightness,
+    speed: body.speed as Speed,
+    direction: body.direction as Direction,
+  };
+}
+
 // ─── Mock data ───────────────────────────────────────────────────────────────
 
 interface MockKeyboard {
@@ -14,8 +154,6 @@ const MOCK_KEYBOARDS: MockKeyboard[] = [
   { path: "mock-ak35i",  name: "AK35I",   manufacturer: "AJAZZ", kind: "ak35i",   features: { rgb: true, timeSync: true  }, mock: true },
   { path: "mock-f75max", name: "F75 Max", manufacturer: "Aula",  kind: "f75_max", features: { rgb: true, timeSync: true  }, mock: true },
 ];
-
-let connectedPath: string | null = null;
 
 // When OPENAJAZZ_MOCK=1 (or no real keyboard found) the server returns the mock
 // keyboard list and silently swallows HID writes. Set automatically by
@@ -748,26 +886,37 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // GET /api/keyboards — list detected keyboards (real or mock)
   if (method === "GET" && pathname === "/api/keyboards") {
-    if (MOCK_MODE) {
-      return Response.json(MOCK_KEYBOARDS);
+    if (MOCK_MODE) return Response.json(MOCK_KEYBOARDS);
+    try {
+      return Response.json(discoverKeyboards());
+    } catch (e: any) {
+      return Response.json({ error: e.message }, { status: 500 });
     }
-    // TODO: use node-hid to scan for supported keyboards and return them here.
-    // For now, real mode returns an empty list until HID discovery is implemented.
-    return Response.json([]);
   }
 
-  // POST /api/connect — set active keyboard
+  // POST /api/connect — open HID device and set active keyboard
   if (method === "POST" && pathname === "/api/connect") {
     const body = await req.json() as { path: string };
-    connectedPath = body.path;
-    console.log(MOCK_MODE ? "[mock]" : "[hid]", "connected:", connectedPath);
-    return Response.json({ ok: true });
+    if (MOCK_MODE) {
+      console.log("[mock] connected:", body.path);
+      return Response.json({ ok: true });
+    }
+    try {
+      connectReal(body.path);
+      console.log("[hid] connected:", body.path);
+      return Response.json({ ok: true });
+    } catch (e: any) {
+      return Response.json({ ok: false, error: e.message }, { status: 500 });
+    }
   }
 
-  // POST /api/disconnect — clear active keyboard
+  // POST /api/disconnect — close HID device
   if (method === "POST" && pathname === "/api/disconnect") {
-    console.log(MOCK_MODE ? "[mock]" : "[hid]", "disconnected:", connectedPath);
-    connectedPath = null;
+    if (!MOCK_MODE && openKeyboard) {
+      try { openKeyboard.device.close(); } catch { /* ignore */ }
+      openKeyboard = null;
+    }
+    console.log(MOCK_MODE ? "[mock]" : "[hid]", "disconnected");
     return Response.json({ ok: true });
   }
 
@@ -775,23 +924,40 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (method === "POST" && pathname === "/api/rgb") {
     const body = await req.json();
     if (MOCK_MODE) {
-      console.log("[mock] rgb for", connectedPath, body);
-    } else {
-      // TODO: plug in node-hid here
-      console.log("[hid] rgb for", connectedPath, body);
+      console.log("[mock] rgb:", body);
+      return Response.json({ ok: true });
     }
-    return Response.json({ ok: true });
+    if (!openKeyboard) {
+      return Response.json({ ok: false, error: "No keyboard connected" }, { status: 400 });
+    }
+    try {
+      await writeRgbInto(parseRgb(body), openKeyboard.keyboard);
+      console.log("[hid] rgb applied");
+      return Response.json({ ok: true });
+    } catch (e: any) {
+      console.error("[hid] rgb error:", e.message);
+      return Response.json({ ok: false, error: e.message }, { status: 500 });
+    }
   }
 
   // POST /api/time — sync clock to keyboard
   if (method === "POST" && pathname === "/api/time") {
     if (MOCK_MODE) {
-      console.log("[mock] time sync for", connectedPath);
-    } else {
-      // TODO: plug in node-hid here
-      console.log("[hid] time sync for", connectedPath);
+      console.log("[mock] time sync");
+      return Response.json({ ok: true, time: new Date().toISOString() });
     }
-    return Response.json({ ok: true, time: new Date().toISOString() });
+    if (!openKeyboard) {
+      return Response.json({ ok: false, error: "No keyboard connected" }, { status: 400 });
+    }
+    try {
+      await writeTimeSyncInto({ dateTime: new Date() }, openKeyboard.keyboard);
+      const time = new Date().toISOString();
+      console.log("[hid] time synced:", time);
+      return Response.json({ ok: true, time });
+    } catch (e: any) {
+      console.error("[hid] time error:", e.message);
+      return Response.json({ ok: false, error: e.message }, { status: 500 });
+    }
   }
 
   return new Response("Not Found", { status: 404 });
