@@ -1,10 +1,10 @@
-import { KeyboardKind, KeyboardFeatures, KeyboardDevice } from "../types.ts";
+import { KeyboardDevice, KeyboardFeatures, KeyboardKind } from "../types.ts";
 
 export abstract class Keyboard {
   abstract readonly vendorId: number;
   abstract readonly productId: number;
   abstract readonly usagePage: number;
-  
+
   abstract readonly features: KeyboardFeatures;
   abstract readonly manufacturer: string;
   abstract readonly name: string;

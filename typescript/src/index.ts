@@ -13,7 +13,12 @@ import { F75Max } from "./keyboards/f75_max.ts";
 import { KeyboardDevice } from "./types.ts";
 import { Keyboard } from "./keyboards/keyboard.ts";
 
-export function createKeyboard(vendorId: number, productId: number, usagePage: number, device: KeyboardDevice): Keyboard | null {
+export function createKeyboard(
+  vendorId: number,
+  productId: number,
+  usagePage: number,
+  device: KeyboardDevice,
+): Keyboard | null {
   if (vendorId === 0x320f && productId === 0x505b && usagePage === 0xff1c) {
     return new Ak820(device);
   }

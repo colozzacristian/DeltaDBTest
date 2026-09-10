@@ -1,5 +1,12 @@
-import { createKeyboard, writeRgbInto, Effect, Brightness, Speed, Direction } from "./src/index.ts";
-import { WebHIDFeatureDevice, WebHIDDeviceNative } from "./src/webhid.ts";
+import {
+  Brightness,
+  createKeyboard,
+  Direction,
+  Effect,
+  Speed,
+  writeRgbInto,
+} from "./src/index.ts";
+import { WebHIDDeviceNative, WebHIDFeatureDevice } from "./src/webhid.ts";
 
 const html = `<!DOCTYPE html>
 <html>

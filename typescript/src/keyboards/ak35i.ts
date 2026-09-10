@@ -1,4 +1,4 @@
-import { KeyboardKind, KeyboardFeatures } from "../types.ts";
+import { KeyboardFeatures, KeyboardKind } from "../types.ts";
 import { Keyboard } from "./keyboard.ts";
 
 export class Ak35i extends Keyboard {

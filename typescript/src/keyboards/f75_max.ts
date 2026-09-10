@@ -1,6 +1,13 @@
-import { KeyboardKind, KeyboardFeatures } from "../types.ts";
+import { KeyboardFeatures, KeyboardKind } from "../types.ts";
 import { Keyboard } from "./keyboard.ts";
-import { Rgb, writeColorToFormat, writeEffectToFormat, writeBrightnessToFormat, writeSpeedToFormat, writeDirectionToFormat } from "../reports/rgb.ts";
+import {
+  Rgb,
+  writeBrightnessToFormat,
+  writeColorToFormat,
+  writeDirectionToFormat,
+  writeEffectToFormat,
+  writeSpeedToFormat,
+} from "../reports/rgb.ts";
 import { TimeSync } from "../reports/time.ts";
 
 export class F75Max extends Keyboard {
@@ -18,9 +25,9 @@ export class F75Max extends Keyboard {
   readonly kind = KeyboardKind.F75_MAX;
 }
 
-export type F75DataMessage = 
-  | { type: "rgb", rgb: Rgb }
-  | { type: "timeSync", timeSync: TimeSync };
+export type F75DataMessage =
+  | { type: "rgb"; rgb: Rgb }
+  | { type: "timeSync"; timeSync: TimeSync };
 
 enum F75ControlMessage {
   BeginCommunication = 0x18,
@@ -41,7 +48,7 @@ function constructPreDataMsg(kind: number): Uint8Array {
 }
 
 async function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export class F75CommunicationGuard {
@@ -52,7 +59,9 @@ export class F75CommunicationGuard {
 
   static async create(keyboard: Keyboard): Promise<F75CommunicationGuard> {
     const guard = new F75CommunicationGuard(keyboard);
-    await guard.keyboard.write(constructControlMsg(F75ControlMessage.BeginCommunication));
+    await guard.keyboard.write(
+      constructControlMsg(F75ControlMessage.BeginCommunication),
+    );
     await sleep(5);
     await guard.keyboard.read(guard.temp);
     await sleep(5);
@@ -82,7 +91,7 @@ export class F75CommunicationGuard {
     } else if (data.type === "timeSync") {
       buf[2] = 0x01;
       buf[3] = 0x5a;
-      
+
       const dt = data.timeSync.dateTime;
       buf[4] = dt.getFullYear() % 100;
       buf[5] = dt.getDate();
@@ -103,7 +112,9 @@ export class F75CommunicationGuard {
     if (this.closed) return;
     this.closed = true;
     try {
-      await this.keyboard.write(constructControlMsg(F75ControlMessage.EndCommunication));
+      await this.keyboard.write(
+        constructControlMsg(F75ControlMessage.EndCommunication),
+      );
       await sleep(5);
       await this.keyboard.read(this.temp);
     } catch (e) {

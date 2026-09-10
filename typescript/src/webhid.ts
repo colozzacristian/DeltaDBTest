@@ -56,4 +56,3 @@ export class WebHIDFeatureDevice implements KeyboardDevice {
     return result.length + 1;
   }
 }
-
