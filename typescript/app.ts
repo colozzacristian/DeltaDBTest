@@ -162,7 +162,7 @@ const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 
 // ─── Package version (kept in sync with deno.json) ───────────────────────────
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.1";
 
 // ─── Frontend HTML ────────────────────────────────────────────────────────────
 // All JS inside the template literal uses plain functions and string
@@ -965,18 +965,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
 // ─── Window lifecycle ─────────────────────────────────────────────────────────
 
-// Exit the process when the user closes the window so Deno.serve() doesn't
-// keep the app alive as a zombie background process.
+// Adopt the startup window that deno desktop opens automatically.
+// The first `new Deno.BrowserWindow()` call adopts it rather than creating a
+// new one, so this is the correct way to get a reference to it.
+// Without this, Deno.serve() keeps the process alive after the window closes.
 try {
-  const win = (Deno as any).BrowserWindow?.getCurrent?.();
-  if (win) {
-    win.on("close", () => {
-      if (openKeyboard) {
-        try { openKeyboard.device.close(); } catch { /* ignore */ }
-      }
-      Deno.exit(0);
-    });
-  }
+  const win = new (Deno as any).BrowserWindow({ title: "openajazz" });
+  win.addEventListener("close", () => {
+    if (openKeyboard) {
+      try { openKeyboard.device.close(); } catch { /* ignore */ }
+    }
+    Deno.exit(0);
+  });
 } catch {
-  // Not running inside deno desktop — dev mode, ignore.
+  // Not running inside deno desktop — dev mode via `deno run`, ignore.
 }

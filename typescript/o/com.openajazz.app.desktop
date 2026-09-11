@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=o
+Exec=o
+Icon=AppIcon
+StartupWMClass=com.openajazz.app
+Categories=Utility;

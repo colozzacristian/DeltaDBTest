@@ -1,6 +1,6 @@
 {
   "name": "@openajazz/jazztastic",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "exports": "./src/index.ts",
   "desktop": {
     "app": {
@@ -14,10 +14,10 @@
   },
   "nodeModulesDir": "auto",
   "tasks": {
-    "dev": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --hmr app.ts",
-    "dev:real": "deno desktop --allow-env --allow-read --hmr app.ts",
-    "build": "deno desktop --allow-env app.ts",
-    "build:mock": "OPENAJAZZ_MOCK=1 deno desktop --allow-env app.ts"
+    "dev": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --allow-ffi --node-modules-dir=auto --hmr app.ts",
+    "dev:real": "deno desktop --allow-env --allow-ffi --allow-read --node-modules-dir=auto --hmr app.ts",
+    "build": "deno desktop --allow-env --allow-ffi --node-modules-dir=auto app.ts",
+    "build:mock": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --allow-ffi --node-modules-dir=auto app.ts"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@1"
