@@ -962,3 +962,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   return new Response("Not Found", { status: 404 });
 });
+
+// ─── Window lifecycle ─────────────────────────────────────────────────────────
+
+// Exit the process when the user closes the window so Deno.serve() doesn't
+// keep the app alive as a zombie background process.
+try {
+  const win = (Deno as any).BrowserWindow?.getCurrent?.();
+  if (win) {
+    win.on("close", () => {
+      if (openKeyboard) {
+        try { openKeyboard.device.close(); } catch { /* ignore */ }
+      }
+      Deno.exit(0);
+    });
+  }
+} catch {
+  // Not running inside deno desktop — dev mode, ignore.
+}

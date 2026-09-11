@@ -83,11 +83,32 @@ jobs:
             --output ${{ matrix.output }} \
             app.ts
 
+      # Windows: also build a portable ZIP (directory bundle, no installer needed)
+      - name: Build Windows portable ZIP
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: |
+          cd typescript
+          deno desktop --allow-env --allow-read \
+            --node-modules-dir=auto \
+            --allow-scripts=npm:node-hid \
+            --backend cef \
+            --target x86_64-pc-windows-msvc \
+            --output openajazz-windows-x86_64-portable \
+            app.ts
+          zip -r openajazz-windows-x86_64-portable.zip openajazz-windows-x86_64-portable/
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output }}
           path: typescript/${{ matrix.output }}
+
+      - name: Upload Windows portable ZIP
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openajazz-windows-x86_64-portable.zip
+          path: typescript/openajazz-windows-x86_64-portable.zip
 
   # ── Publish a GitHub Release when a version tag is pushed ─────────────────
   release:
