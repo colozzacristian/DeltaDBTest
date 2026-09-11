@@ -6,3 +6,5 @@ node_modules/
 *.AppImage
 *.so
 app.so
+openajazz/
+o/
