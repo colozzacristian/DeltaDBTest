@@ -34,189 +34,12 @@ function logError(...args: unknown[]) {
   try { Deno.writeTextFileSync(LOG_FILE, line + "\n", { append: true }); } catch { /* ignore */ }
 }
 
-import {
-  Brightness,
-  Color,
-  Direction,
-  Effect,
-  Keyboard,
-  Rgb,
-  Speed,
-  createKeyboard,
-  writeRgbInto,
-  writeTimeSyncInto,
-} from "./src/index.ts";
-import {
-  NodeHIDFeatureDevice,
-  NodeHIDOutputDevice,
-  openFeatureDevice,
-  openOutputDevice,
-} from "./src/nodehid.ts";
+// ─── Mode & version ──────────────────────────────────────────────────────────
 
-// ─── Mode & version ────────────────────────────────────────────────────────────
-// These must be defined before node-hid is loaded so the lazy load below
-// can read MOCK_MODE and skip loading if not needed.
-
-const VERSION = "0.2.10";
+const VERSION = "0.3.0";
 const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 
-// ─── Lazy node-hid load ───────────────────────────────────────────────────────
-// node-hid ships a native .node binary. A static import crashes compiled
-// binaries (AppImage / MSI) that don’t have node_modules on disk. We
-// dynamic-import it instead so failure is caught and the app still starts in a
-// “no keyboard” state rather than crashing.
-
 log(`[openajazz] v${VERSION} | platform: ${Deno.build.os} | mock: ${MOCK_MODE}`);
-
-let HID: any = null;
-
-if (!MOCK_MODE) {
-  (async () => {
-    try {
-      HID = (await import("npm:node-hid")).default;
-      log("[openajazz] node-hid loaded successfully");
-    } catch (e: any) {
-      logWarn("[openajazz] node-hid failed to load:", e.message);
-      logWarn("[openajazz] Keyboard discovery unavailable.");
-    }
-  })();
-}
-
-// ─── Supported keyboard definitions (for real HID discovery) ─────────────────
-
-const SUPPORTED = [
-  {
-    vendorId: 0x320F,
-    productId: 0x505B,
-    usagePage: 0xFF1C,
-    name: "AK820",
-    manufacturer: "AJAZZ",
-    kind: "ak820",
-    features: { rgb: true, timeSync: false },
-    reportType: "output" as const,
-  },
-  {
-    vendorId: 0x0c45,
-    productId: 0x8009,
-    usagePage: 0xff13,
-    name: "AK35I",
-    manufacturer: "AJAZZ",
-    kind: "ak35i",
-    features: { rgb: true, timeSync: true },
-    reportType: "feature" as const,
-  },
-  {
-    vendorId: 0x0c45,
-    productId: 0x800a,
-    usagePage: 0xff13,
-    name: "F75 Max",
-    manufacturer: "Aula",
-    kind: "f75_max",
-    features: { rgb: true, timeSync: true },
-    reportType: "feature" as const,
-  },
-];
-
-// ─── Real keyboard state ──────────────────────────────────────────────────────
-
-interface OpenKeyboard {
-  keyboard: Keyboard;
-  device: NodeHIDOutputDevice | NodeHIDFeatureDevice;
-}
-
-let openKeyboard: OpenKeyboard | null = null;
-
-function discoverKeyboards() {
-  if (!HID) return [];
-  const all = HID.devices() as any[];
-  log(`[openajazz] HID scan: ${all.length} total devices`);
-
-  // Log every device so mismatches are visible in the terminal / log file
-  for (const d of all) {
-    const vid = `0x${d.vendorId?.toString(16).padStart(4, "0")}`;
-    const pid = `0x${d.productId?.toString(16).padStart(4, "0")}`;
-    const up  = `0x${d.usagePage?.toString(16).padStart(4, "0")}`;
-    log(`[openajazz]   VID:${vid} PID:${pid} usagePage:${up} path:${d.path ?? "(none)"}`);
-  }
-
-  const found = SUPPORTED.flatMap((s) =>
-    all
-      .filter(
-        (d) =>
-          d.vendorId === s.vendorId &&
-          d.productId === s.productId &&
-          // usagePage can be 0 on Linux hidraw — fall back to VID+PID only
-          (d.usagePage === 0 || d.usagePage === s.usagePage) &&
-          d.path,
-      )
-      .map((d) => ({
-        path: d.path as string,
-        name: s.name,
-        manufacturer: s.manufacturer,
-        kind: s.kind,
-        features: s.features,
-        mock: false,
-      }))
-  );
-
-  log(`[openajazz] Found ${found.length} supported keyboard(s): ${found.map((k: any) => k.name).join(", ") || "none"}`);
-  return found;
-}
-
-function connectReal(path: string): void {
-  if (!HID) throw new Error("node-hid is not available on this system.");
-
-  if (openKeyboard) {
-    try { openKeyboard.device.close(); } catch { /* ignore */ }
-    openKeyboard = null;
-  }
-
-  const all = HID.devices() as any[];
-  const info = all.find((d: any) => d.path === path);
-  if (!info) throw new Error(`Device not found: ${path}`);
-
-  const supported = SUPPORTED.find(
-    (s) =>
-      s.vendorId === info.vendorId &&
-      s.productId === info.productId &&
-      s.usagePage === info.usagePage,
-  );
-  if (!supported) throw new Error(`Unsupported keyboard at ${path}`);
-
-  const device = supported.reportType === "output"
-    ? openOutputDevice(HID, path)
-    : openFeatureDevice(HID, path);
-
-  const keyboard = createKeyboard(
-    info.vendorId,
-    info.productId,
-    info.usagePage,
-    device,
-  );
-  if (!keyboard) throw new Error("createKeyboard returned null");
-
-  openKeyboard = { keyboard, device };
-}
-
-function parseRgb(
-  body: { color: string; rainbow: boolean; effect: string; brightness: number; speed: number; direction: number },
-): Rgb {
-  const color: Color = body.rainbow
-    ? { type: "rainbow" }
-    : {
-      type: "rgb",
-      r: parseInt(body.color.slice(1, 3), 16),
-      g: parseInt(body.color.slice(3, 5), 16),
-      b: parseInt(body.color.slice(5, 7), 16),
-    };
-  return {
-    color,
-    effect: body.effect as Effect,
-    brightness: body.brightness as Brightness,
-    speed: body.speed as Speed,
-    direction: body.direction as Direction,
-  };
-}
 
 // ─── Mock data ───────────────────────────────────────────────────────────────
 
@@ -244,6 +67,7 @@ const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <script>window.__MOCK__=${MOCK_MODE};window.__VERSION__='${VERSION}';</script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>openajazz</title>
   <style>
@@ -613,7 +437,10 @@ const html = `<!DOCTYPE html>
     <aside class="sidebar">
       <div class="sidebar-heading">Keyboards</div>
       <div id="kb-list"></div>
-      <button class="btn" id="refresh-btn" style="margin-top:auto;width:100%">&#x21BB; Refresh</button>
+      <div style="margin-top:auto;display:flex;flex-direction:column;gap:0.35rem;padding:0.5rem 0 0;">
+        <button class="btn" id="add-kb-btn" style="width:100%">&#xFF0B; Add Keyboard</button>
+        <button class="btn" id="refresh-btn" style="width:100%">&#x21BB; Refresh</button>
+      </div>
     </aside>
 
     <!-- Main content -->
@@ -697,7 +524,120 @@ const html = `<!DOCTYPE html>
   </div>
 
   <script type="module">
-    // ── Effect lists (no template literals used — safe inside TS template literal) ──
+    // ── Mode flag injected by Deno at startup ──────────────────────────────────
+    var MOCK_MODE = window.__MOCK__ || false;
+
+    // ── Supported keyboards (VID/PID/usagePage) for WebHID ───────────────────
+    var SUPPORTED_KEYBOARDS = [
+      { vendorId: 0x320F, productId: 0x505B, usagePage: 0xFF1C, name: 'AK820',   manufacturer: 'AJAZZ', kind: 'ak820',   timeSync: false },
+      { vendorId: 0x0c45, productId: 0x8009, usagePage: 0xff13, name: 'AK35I',   manufacturer: 'AJAZZ', kind: 'ak35i',   timeSync: true  },
+      { vendorId: 0x0c45, productId: 0x800a, usagePage: 0xff13, name: 'F75 Max', manufacturer: 'Aula',  kind: 'f75_max', timeSync: true  },
+    ];
+
+    var AK820_EFFECT_CODES = {
+      static:5, corrugated:1, cloud:2, serpentine:3, spectrum:4,
+      breath:5, reaction:7, ripples:8, traverse:9, stars:10,
+      flowers:11, roll:12, wave:13, cartoon:14, rain:15, scan:16, surmount:17, speed:18
+    };
+    var F75_EFFECT_CODES = {
+      static:1, glittering:4, falling:5, colourful:6, breath:7, spectrum:8,
+      outward:9, scrolling:10, rolling:11, rotating:12, explode:13, launch:14,
+      ripples:15, flowing:16, pulsating:17, tilt:18, shuttle:19
+    };
+
+    function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+    function identifyDevice(device) {
+      var usagePage = (device.collections && device.collections[0]) ? device.collections[0].usagePage : 0;
+      for (var i = 0; i < SUPPORTED_KEYBOARDS.length; i++) {
+        var kb = SUPPORTED_KEYBOARDS[i];
+        if (device.vendorId === kb.vendorId && device.productId === kb.productId &&
+            (usagePage === 0 || usagePage === kb.usagePage)) {
+          return { path: device.productId + '_' + device.vendorId, name: kb.name,
+                   manufacturer: kb.manufacturer, kind: kb.kind,
+                   features: { rgb: true, timeSync: kb.timeSync }, mock: false };
+        }
+      }
+      return null;
+    }
+
+    // ── AK820: Output Reports ─────────────────────────────────────────────────
+    async function applyRgbAK820(hidDevice, s) {
+      var data = new Uint8Array(64);
+      data[0] = 0x2A; data[1] = 0x3D; data[2] = 0x06; data[3] = 0x1d;
+      if (s.rainbow) { data[12] = 0x01; }
+      else { data[13] = s.r; data[14] = s.g; data[15] = s.b; }
+      data[8]  = AK820_EFFECT_CODES[s.effect] || 5;
+      data[9]  = s.brightness;
+      data[10] = s.speed;
+      data[11] = s.direction;
+      await hidDevice.sendReport(0x04, data);
+    }
+
+    // ── F75/AK35i: Feature Reports ────────────────────────────────────────────
+    function f75ControlMsg(kind) {
+      var d = new Uint8Array(64); d[0] = 0x04; d[1] = kind; return d;
+    }
+    function f75PreDataMsg(kind) {
+      var d = f75ControlMsg(kind); d[8] = 0x01; return d;
+    }
+
+    async function applyRgbF75(hidDevice, s) {
+      await hidDevice.sendFeatureReport(0, f75ControlMsg(0x18));
+      await sleep(5);
+      await hidDevice.receiveFeatureReport(0);
+      await sleep(5);
+
+      await hidDevice.sendFeatureReport(0, f75PreDataMsg(0x13));
+      await sleep(5);
+      await hidDevice.receiveFeatureReport(0);
+      await sleep(5);
+
+      var data = new Uint8Array(64);
+      data[14] = 0xAA; data[15] = 0x55;
+      data[0] = F75_EFFECT_CODES[s.effect] || 1;
+      if (!s.rainbow) { data[1] = s.r; data[2] = s.g; data[3] = s.b; }
+      data[9]  = s.brightness;
+      data[10] = 4 - s.speed;  // F75 speed is inverted
+      data[11] = s.direction;
+      await hidDevice.sendFeatureReport(0, data);
+      await sleep(5);
+
+      await hidDevice.sendFeatureReport(0, f75ControlMsg(0x02));
+      await sleep(5);
+      await hidDevice.receiveFeatureReport(0);
+    }
+
+    async function applyTimeSyncF75(hidDevice) {
+      await hidDevice.sendFeatureReport(0, f75ControlMsg(0x18));
+      await sleep(5);
+      await hidDevice.receiveFeatureReport(0);
+      await sleep(5);
+
+      await hidDevice.sendFeatureReport(0, f75PreDataMsg(0x28));
+      await sleep(5);
+      await hidDevice.receiveFeatureReport(0);
+      await sleep(5);
+
+      var now = new Date();
+      var data = new Uint8Array(64);
+      data[1] = 0x01; data[2] = 0x5a;
+      data[3] = now.getFullYear() % 100;
+      data[4] = now.getDate();
+      data[5] = now.getMonth() + 1;
+      data[6] = now.getHours();
+      data[7] = now.getMinutes();
+      data[8] = now.getSeconds();
+      data[62] = 0xaa; data[63] = 0x55;
+      await hidDevice.sendFeatureReport(0, data);
+      await sleep(5);
+
+      await hidDevice.sendFeatureReport(0, f75ControlMsg(0x02));
+      await sleep(5);
+      await hidDevice.receiveFeatureReport(0);
+    }
+
+    // ── Effect lists ──────────────────────────────────────────────────────────
     var EFFECTS_AK820 = [
       'Static','Corrugated','Cloud','Serpentine','Spectrum','Breath',
       'Reaction','Ripples','Traverse','Stars','Flowers','Roll','Wave',
@@ -711,7 +651,7 @@ const html = `<!DOCTYPE html>
     var BRIGHTNESS_LABELS = ['Lowest','Low','Medium','High','Highest'];
     var SPEED_LABELS      = ['Fastest','Fast','Medium','Slow','Slowest'];
 
-    // ── App state ──────────────────────────────────────────────────────────────
+    // ── App state ─────────────────────────────────────────────────────────────
     var state = {
       keyboards: [],
       selected:  null,   // full keyboard object or null
@@ -723,7 +663,9 @@ const html = `<!DOCTYPE html>
       direction:  0,     // 0 = L→R, 1 = R→L
     };
 
-    // ── DOM references ─────────────────────────────────────────────────────────
+    var activeHidDevice = null;  // raw HIDDevice opened via WebHID
+
+    // ── DOM references ────────────────────────────────────────────────────────
     var kbList         = document.getElementById('kb-list');
     var emptyState     = document.getElementById('empty-state');
     var controlsPanel  = document.getElementById('controls-panel');
@@ -743,11 +685,12 @@ const html = `<!DOCTYPE html>
     var applyBtn       = document.getElementById('apply-btn');
     var statusBar      = document.getElementById('status-bar');
     var refreshBtn     = document.getElementById('refresh-btn');
+    var addKbBtn       = document.getElementById('add-kb-btn');
     var emptyMsg       = document.getElementById('empty-state-msg');
 
     var statusTimer = null;
 
-    // ── Status feedback ────────────────────────────────────────────────────────
+    // ── Status feedback ───────────────────────────────────────────────────────
     function showStatus(msg, ok) {
       clearTimeout(statusTimer);
       statusBar.textContent = msg;
@@ -761,21 +704,42 @@ const html = `<!DOCTYPE html>
       }, 3000);
     }
 
-    // ── Sidebar ──────────────────────────────────────────────────────────────────────────────
+    // ── Sidebar ───────────────────────────────────────────────────────────────
     function loadKeyboards() {
+      if (MOCK_MODE) {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'Scanning...';
+        fetch('/api/keyboards')
+          .then(function(res) { return res.json(); })
+          .then(function(keyboards) {
+            state.keyboards = keyboards;
+            renderSidebar();
+            if (!state.selected && keyboards.length > 0) selectKeyboard(keyboards[0]);
+          })
+          .catch(function(e) { console.error('Discovery failed:', e); })
+          .finally(function() {
+            refreshBtn.disabled = false;
+            refreshBtn.textContent = '\u21BB Refresh';
+          });
+        return;
+      }
+      if (!navigator.hid) {
+        emptyMsg.textContent = 'WebHID not available. Make sure the app is built with the CEF backend.';
+        return;
+      }
       refreshBtn.disabled = true;
       refreshBtn.textContent = 'Scanning...';
-      fetch('/api/keyboards')
-        .then(function(res) { return res.json(); })
-        .then(function(keyboards) {
+      navigator.hid.getDevices()
+        .then(function(devices) {
+          var keyboards = devices.map(identifyDevice).filter(Boolean);
           state.keyboards = keyboards;
+          window.__hidDevices = {};
+          devices.forEach(function(d) {
+            var info = identifyDevice(d);
+            if (info) window.__hidDevices[info.path] = d;
+          });
           renderSidebar();
-          if (!state.selected && keyboards.length > 0) {
-            selectKeyboard(keyboards[0]);
-          }
-        })
-        .catch(function(e) {
-          console.error('Discovery failed:', e);
+          if (!state.selected && keyboards.length > 0) selectKeyboard(keyboards[0]);
         })
         .finally(function() {
           refreshBtn.disabled = false;
@@ -783,13 +747,27 @@ const html = `<!DOCTYPE html>
         });
     }
 
+    function addKeyboard() {
+      if (!navigator.hid) return;
+      var filters = SUPPORTED_KEYBOARDS.map(function(kb) {
+        return { vendorId: kb.vendorId, productId: kb.productId };
+      });
+      navigator.hid.requestDevice({ filters: filters })
+        .then(function(devices) {
+          if (devices.length > 0) loadKeyboards();
+        })
+        .catch(function() { /* user cancelled */ });
+    }
+
     refreshBtn.addEventListener('click', loadKeyboards);
+    if (addKbBtn) addKbBtn.addEventListener('click', addKeyboard);
+    // Add Keyboard button is only meaningful in real (WebHID) mode
+    if (MOCK_MODE && addKbBtn) addKbBtn.style.display = 'none';
 
     function renderSidebar() {
       kbList.innerHTML = '';
       if (state.keyboards.length === 0) {
-        var msg = emptyMsg;
-        msg.textContent = 'No supported keyboards found. Plug in your keyboard and click Refresh.';
+        emptyMsg.textContent = 'No supported keyboards found. Plug in your keyboard and click Refresh.';
       } else {
         emptyMsg.textContent = 'Select a keyboard from the sidebar';
       }
@@ -799,7 +777,7 @@ const html = `<!DOCTYPE html>
         btn.className = 'kb-item' + (isActive ? ' active' : '');
         var icon = document.createElement('span');
         icon.className = 'kb-icon';
-        icon.textContent = '⌨';
+        icon.textContent = '\u2328';
         btn.appendChild(icon);
         btn.appendChild(document.createTextNode(kb.name));
         btn.addEventListener('click', function() { selectKeyboard(kb); });
@@ -807,7 +785,7 @@ const html = `<!DOCTYPE html>
       });
     }
 
-    // ── Effect chips ───────────────────────────────────────────────────────────
+    // ── Effect chips ──────────────────────────────────────────────────────────
     function renderEffects() {
       var effects = state.selected && state.selected.kind === 'ak820'
         ? EFFECTS_AK820
@@ -826,7 +804,7 @@ const html = `<!DOCTYPE html>
       });
     }
 
-    // ── Controls panel ─────────────────────────────────────────────────────────
+    // ── Controls panel ────────────────────────────────────────────────────────
     function renderControls() {
       if (!state.selected) {
         emptyState.style.display = 'flex';
@@ -863,21 +841,32 @@ const html = `<!DOCTYPE html>
       renderEffects();
     }
 
-    // ── Keyboard selection ─────────────────────────────────────────────────────
+    // ── Keyboard selection ────────────────────────────────────────────────────
     function selectKeyboard(kb) {
-      state.selected  = kb;
-      state.rainbow   = false;
-      state.effect    = 'static';
+      state.selected = kb;
+      state.rainbow  = false;
+      state.effect   = 'static';
       renderSidebar();
       renderControls();
-      fetch('/api/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: kb.path }),
-      }).catch(function() { /* ignore */ });
+      if (!MOCK_MODE) {
+        var raw = window.__hidDevices && window.__hidDevices[kb.path];
+        if (raw) {
+          raw.open().then(function() {
+            activeHidDevice = raw;
+          }).catch(function(e) {
+            showStatus('\u2717 Failed to open device: ' + e.message, false);
+          });
+        }
+      } else {
+        fetch('/api/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: kb.path }),
+        }).catch(function() {});
+      }
     }
 
-    // ── Input event wiring ─────────────────────────────────────────────────────
+    // ── Input event wiring ────────────────────────────────────────────────────
     colorInput.addEventListener('input', function() {
       state.color = colorInput.value;
       hexLabel.textContent = state.color.toUpperCase();
@@ -911,58 +900,81 @@ const html = `<!DOCTYPE html>
       dirLtr.className = 'btn';
     });
 
-    // ── Apply RGB ──────────────────────────────────────────────────────────────
+    // ── Apply RGB ─────────────────────────────────────────────────────────────
     applyBtn.addEventListener('click', function() {
       if (!state.selected) return;
-      fetch('/api/rgb', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          color:      state.color,
-          rainbow:    state.rainbow,
-          effect:     state.effect,
-          brightness: state.brightness,
-          speed:      state.speed,
-          direction:  state.direction,
-        }),
-      })
-      .then(function(res) { return res.json(); })
-      .then(function(data) {
-        if (data.ok) {
-          showStatus('\u2713 RGB settings applied.', true);
-        } else {
-          showStatus('\u2717 Failed: ' + (data.error || 'unknown error'), false);
-        }
-      })
-      .catch(function(e) {
-        showStatus('\u2717 Failed: ' + e.message, false);
-      });
+      if (MOCK_MODE) {
+        fetch('/api/rgb', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            color:      state.color,
+            rainbow:    state.rainbow,
+            effect:     state.effect,
+            brightness: state.brightness,
+            speed:      state.speed,
+            direction:  state.direction,
+          }),
+        })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            showStatus('\u2713 RGB settings applied.', true);
+          } else {
+            showStatus('\u2717 Failed: ' + (data.error || 'unknown error'), false);
+          }
+        })
+        .catch(function(e) { showStatus('\u2717 Failed: ' + e.message, false); });
+        return;
+      }
+      if (!activeHidDevice) { showStatus('\u2717 No keyboard open', false); return; }
+      var s = {
+        r: parseInt(state.color.slice(1,3), 16),
+        g: parseInt(state.color.slice(3,5), 16),
+        b: parseInt(state.color.slice(5,7), 16),
+        rainbow: state.rainbow,
+        effect: state.effect,
+        brightness: state.brightness,
+        speed: state.speed,
+        direction: state.direction,
+      };
+      var fn = (state.selected.kind === 'ak820') ? applyRgbAK820 : applyRgbF75;
+      fn(activeHidDevice, s)
+        .then(function() { showStatus('\u2713 RGB applied.', true); })
+        .catch(function(e) { showStatus('\u2717 Failed: ' + e.message, false); });
     });
 
-    // ── Sync Time ──────────────────────────────────────────────────────────────
+    // ── Sync Time ─────────────────────────────────────────────────────────────
     syncTimeBtn.addEventListener('click', function() {
       if (!state.selected) return;
-      fetch('/api/time', { method: 'POST' })
-      .then(function(res) { return res.json(); })
-      .then(function(data) {
-        if (data.ok) {
-          showStatus('\u2713 Time synced: ' + data.time, true);
-        } else {
-          showStatus('\u2717 Failed to sync time.', false);
-        }
-      })
-      .catch(function(e) {
-        showStatus('\u2717 Failed: ' + e.message, false);
-      });
+      if (MOCK_MODE) {
+        fetch('/api/time', { method: 'POST' })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            showStatus('\u2713 Time synced: ' + data.time, true);
+          } else {
+            showStatus('\u2717 Failed to sync time.', false);
+          }
+        })
+        .catch(function(e) { showStatus('\u2717 Failed: ' + e.message, false); });
+        return;
+      }
+      if (!activeHidDevice) { showStatus('\u2717 No keyboard open', false); return; }
+      applyTimeSyncF75(activeHidDevice)
+        .then(function() { showStatus('\u2713 Time synced.', true); })
+        .catch(function(e) { showStatus('\u2717 Failed: ' + e.message, false); });
     });
 
-    // ── Bootstrap ──────────────────────────────────────────────────────────────────────────────
+    // ── Bootstrap ─────────────────────────────────────────────────────────────
     loadKeyboards();
   </script>
 </body>
 </html>`;
 
-// ─── HTTP server ──────────────────────────────────────────────────────────────
+// ─── HTTP server ──────────────────────────────────────────────────────────────────
+// Real HID communication is handled by WebHID inside the CEF webview.
+// The backend only serves the HTML page; all API routes are mock-only.
 
 Deno.serve(async (req: Request): Promise<Response> => {
   const url = new URL(req.url);
@@ -982,94 +994,34 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
   }
 
-  // GET /api/keyboards — list detected keyboards (real or mock)
-  if (method === "GET" && pathname === "/api/keyboards") {
-    if (MOCK_MODE) {
+  // Mock-mode only routes — the webview uses these instead of WebHID when
+  // OPENAJAZZ_MOCK=1 so the UI can be exercised without real hardware.
+  if (MOCK_MODE) {
+    if (method === "GET" && pathname === "/api/keyboards") {
       log("[openajazz] keyboards: mock mode, returning", MOCK_KEYBOARDS.length, "mock keyboards:", MOCK_KEYBOARDS.map(k => k.name).join(", "));
       return Response.json(MOCK_KEYBOARDS);
     }
-    if (!HID) {
-      log("[openajazz] keyboards: node-hid not yet loaded (still initialising) — returning empty list");
-      return Response.json([]);
-    }
-    try {
-      const keyboards = discoverKeyboards();
-      return Response.json(keyboards);
-    } catch (e: any) {
-      logError("[openajazz] keyboards: discovery error:", e.message);
-      return Response.json({ error: e.message }, { status: 500 });
-    }
-  }
 
-  // POST /api/connect — open HID device and set active keyboard
-  if (method === "POST" && pathname === "/api/connect") {
-    const body = await req.json() as { path: string };
-    if (MOCK_MODE) {
+    if (method === "POST" && pathname === "/api/connect") {
+      const body = await req.json() as { path: string };
       log("[openajazz] connect: mock", body.path);
       return Response.json({ ok: true });
     }
-    log("[openajazz] connect: opening", body.path);
-    try {
-      connectReal(body.path);
-      log("[openajazz] connect: OK", body.path);
+
+    if (method === "POST" && pathname === "/api/disconnect") {
+      log("[openajazz] disconnect: mock");
       return Response.json({ ok: true });
-    } catch (e: any) {
-      logError("[openajazz] connect: FAILED", e.message);
-      return Response.json({ ok: false, error: e.message }, { status: 500 });
     }
-  }
 
-  // POST /api/disconnect — close HID device
-  if (method === "POST" && pathname === "/api/disconnect") {
-    if (!MOCK_MODE && openKeyboard) {
-      try { openKeyboard.device.close(); } catch { /* ignore */ }
-      openKeyboard = null;
-    }
-    log("[openajazz] disconnect");
-    return Response.json({ ok: true });
-  }
-
-  // POST /api/rgb — apply RGB settings
-  if (method === "POST" && pathname === "/api/rgb") {
-    const body = await req.json();
-    if (MOCK_MODE) {
+    if (method === "POST" && pathname === "/api/rgb") {
+      const body = await req.json();
       log("[openajazz] rgb: mock", JSON.stringify(body));
       return Response.json({ ok: true });
     }
-    if (!openKeyboard) {
-      logWarn("[openajazz] rgb: no keyboard connected");
-      return Response.json({ ok: false, error: "No keyboard connected" }, { status: 400 });
-    }
-    log("[openajazz] rgb: sending", JSON.stringify(body));
-    try {
-      await writeRgbInto(parseRgb(body), openKeyboard.keyboard);
-      log("[openajazz] rgb: OK");
-      return Response.json({ ok: true });
-    } catch (e: any) {
-      logError("[openajazz] rgb: FAILED", e.message, e.stack ?? "");
-      return Response.json({ ok: false, error: e.message }, { status: 500 });
-    }
-  }
 
-  // POST /api/time — sync clock to keyboard
-  if (method === "POST" && pathname === "/api/time") {
-    if (MOCK_MODE) {
+    if (method === "POST" && pathname === "/api/time") {
       log("[openajazz] time: mock");
       return Response.json({ ok: true, time: new Date().toISOString() });
-    }
-    if (!openKeyboard) {
-      logWarn("[openajazz] time: no keyboard connected");
-      return Response.json({ ok: false, error: "No keyboard connected" }, { status: 400 });
-    }
-    log("[openajazz] time: syncing");
-    try {
-      await writeTimeSyncInto({ dateTime: new Date() }, openKeyboard.keyboard);
-      const time = new Date().toISOString();
-      log("[openajazz] time: OK", time);
-      return Response.json({ ok: true, time });
-    } catch (e: any) {
-      logError("[openajazz] time: FAILED", e.message, e.stack ?? "");
-      return Response.json({ ok: false, error: e.message }, { status: 500 });
     }
   }
 
@@ -1078,3 +1030,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
 });
 
 log("[openajazz] Server started.");
+
+// Exit when the user presses X. The first new Deno.BrowserWindow() call
+// adopts the startup window rather than creating a new one.
+try {
+  const win = new (Deno as any).BrowserWindow({ title: "openajazz" });
+  win.addEventListener("close", () => {
+    log("[openajazz] Window closed, exiting.");
+    Deno.exit(0);
+  });
+  log("[openajazz] Window close handler registered.");
+} catch {
+  // Running via deno run (dev mode), not deno desktop — ignore.
+}

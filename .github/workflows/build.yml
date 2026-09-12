@@ -37,23 +37,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # NOTE: deno desktop does not support Windows ARM64 (no aarch64-pc-windows-msvc target).
-          # webview backend uses the OS WebView2 (built into Win10/11) for a smaller binary.
+          # CEF backend is required for WebHID (navigator.hid) support.
           - name: Windows x86_64
             target: x86_64-pc-windows-msvc
             output: openajazz-windows-x86_64.msi
-            backend: webview
+            backend: cef
 
-          # WebView backend uses WebKitGTK bundled in the AppImage — no extra deps needed.
           - name: Linux x86_64
             target: x86_64-unknown-linux-gnu
             output: openajazz-linux-x86_64.AppImage
-            backend: webview
+            backend: cef
 
           - name: Linux ARM64
             target: aarch64-unknown-linux-gnu
             output: openajazz-linux-arm64.AppImage
-            backend: webview
+            backend: cef
 
     steps:
       - uses: actions/checkout@v4
@@ -75,9 +73,7 @@ jobs:
       - name: Build ${{ matrix.name }}
         run: |
           cd typescript
-          deno desktop --allow-env --allow-read --allow-write --allow-ffi \
-            --node-modules-dir=auto \
-            --allow-scripts=npm:node-hid \
+          deno desktop --allow-env --allow-read --allow-write \
             --backend ${{ matrix.backend }} \
             --target ${{ matrix.target }} \
             --output ${{ matrix.output }} \
@@ -88,10 +84,8 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: |
           cd typescript
-          deno desktop --allow-env --allow-read --allow-write --allow-ffi \
-            --node-modules-dir=auto \
-            --allow-scripts=npm:node-hid \
-            --backend webview \
+          deno desktop --allow-env --allow-read --allow-write \
+            --backend cef \
             --target x86_64-pc-windows-msvc \
             --output openajazz-windows-x86_64-portable \
             app.ts
