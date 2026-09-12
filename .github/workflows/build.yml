@@ -38,11 +38,11 @@ jobs:
       matrix:
         include:
           # NOTE: deno desktop does not support Windows ARM64 (no aarch64-pc-windows-msvc target).
-          # CEF backend bundles Chromium so the MSI works without WebView2 installed.
+          # webview backend uses the OS WebView2 (built into Win10/11) for a smaller binary.
           - name: Windows x86_64
             target: x86_64-pc-windows-msvc
             output: openajazz-windows-x86_64.msi
-            backend: cef
+            backend: webview
 
           # WebView backend uses WebKitGTK bundled in the AppImage — no extra deps needed.
           - name: Linux x86_64
@@ -87,7 +87,7 @@ jobs:
         run: |
           cd typescript
           deno desktop --allow-env --allow-read --allow-ffi \
-            --backend cef \
+            --backend webview \
             --target x86_64-pc-windows-msvc \
             --output openajazz-windows-x86_64-portable \
             app.ts
