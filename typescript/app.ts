@@ -547,22 +547,68 @@ const html = `<!DOCTYPE html>
 
     function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
+    // ── Webview logger — routes logs to openajazz.log via /api/log ────────────
+    function wlog(level, msg) {
+      var line = '[' + new Date().toISOString() + '] [webview] ' + msg;
+      console.log(line);
+      fetch('/api/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level: level, msg: msg })
+      }).catch(function() {});
+    }
+    function wi(msg) { wlog('info', msg); }
+    function we(msg) { wlog('error', msg); }
+
     function identifyDevice(device) {
-      var usagePage = (device.collections && device.collections[0]) ? device.collections[0].usagePage : 0;
+      var collections = device.collections || [];
+      var colInfo = collections.map(function(c) {
+        return '0x' + (c.usagePage || 0).toString(16) + '/' + (c.usage || 0).toString(16);
+      }).join(', ');
+      wi('identifyDevice: VID=0x' + device.vendorId.toString(16) +
+         ' PID=0x' + device.productId.toString(16) +
+         ' name=' + (device.productName || '?') +
+         ' collections=[' + colInfo + ']');
+
+      // Try to match against each supported keyboard.
+      // usagePage 0 means the browser did not report it; fall back to VID+PID only.
       for (var i = 0; i < SUPPORTED_KEYBOARDS.length; i++) {
         var kb = SUPPORTED_KEYBOARDS[i];
-        if (device.vendorId === kb.vendorId && device.productId === kb.productId &&
-            (usagePage === 0 || usagePage === kb.usagePage)) {
-          return { path: device.productId + '_' + device.vendorId, name: kb.name,
-                   manufacturer: kb.manufacturer, kind: kb.kind,
-                   features: { rgb: true, timeSync: kb.timeSync }, mock: false };
+        if (device.vendorId !== kb.vendorId || device.productId !== kb.productId) continue;
+
+        var matched = false;
+        if (collections.length === 0) {
+          wi('  -> no collections reported, matching by VID+PID only -> ' + kb.name);
+          matched = true;
+        } else {
+          for (var j = 0; j < collections.length; j++) {
+            var up = collections[j].usagePage || 0;
+            if (up === 0 || up === kb.usagePage) {
+              wi('  -> collection[' + j + '] usagePage=0x' + up.toString(16) + ' matches ' + kb.name);
+              matched = true;
+              break;
+            }
+          }
+        }
+        if (!matched) {
+          wi('  -> VID+PID match ' + kb.name + ' but no collection usagePage matched 0x' + kb.usagePage.toString(16));
+        }
+        if (matched) {
+          // Use productName + vendorId as a stable unique path
+          var path = (device.productName || kb.name).replace(/\s+/g, '_') + '_' + device.vendorId.toString(16);
+          return { path: path, name: kb.name, manufacturer: kb.manufacturer,
+                   kind: kb.kind, features: { rgb: true, timeSync: kb.timeSync }, mock: false };
         }
       }
+      wi('  -> no match, device ignored');
       return null;
     }
 
     // ── AK820: Output Reports ─────────────────────────────────────────────────
     async function applyRgbAK820(hidDevice, s) {
+      wi('applyRgbAK820: effect=' + s.effect + ' brightness=' + s.brightness +
+         ' speed=' + s.speed + ' dir=' + s.direction + ' rainbow=' + s.rainbow +
+         ' color=#' + s.r.toString(16).padStart(2,'0') + s.g.toString(16).padStart(2,'0') + s.b.toString(16).padStart(2,'0'));
       var data = new Uint8Array(64);
       data[0] = 0x2A; data[1] = 0x3D; data[2] = 0x06; data[3] = 0x1d;
       if (s.rainbow) { data[12] = 0x01; }
@@ -571,7 +617,9 @@ const html = `<!DOCTYPE html>
       data[9]  = s.brightness;
       data[10] = s.speed;
       data[11] = s.direction;
+      wi('applyRgbAK820: sendReport(0x04, ' + data.length + ' bytes)');
       await hidDevice.sendReport(0x04, data);
+      wi('applyRgbAK820: done');
     }
 
     // ── F75/AK35i: Feature Reports ────────────────────────────────────────────
@@ -583,14 +631,15 @@ const html = `<!DOCTYPE html>
     }
 
     async function applyRgbF75(hidDevice, s) {
-      await hidDevice.sendFeatureReport(0, f75ControlMsg(0x18));
+      wi('applyRgbF75: begin handshake');
+      await hidDevice.sendFeatureReport(0, f75ControlMsg(0x18)); wi('sent BeginCommunication');
       await sleep(5);
-      await hidDevice.receiveFeatureReport(0);
+      await hidDevice.receiveFeatureReport(0); wi('received ack');
       await sleep(5);
 
-      await hidDevice.sendFeatureReport(0, f75PreDataMsg(0x13));
+      await hidDevice.sendFeatureReport(0, f75PreDataMsg(0x13)); wi('sent pre-RGB msg');
       await sleep(5);
-      await hidDevice.receiveFeatureReport(0);
+      await hidDevice.receiveFeatureReport(0); wi('received ack');
       await sleep(5);
 
       var data = new Uint8Array(64);
@@ -598,14 +647,16 @@ const html = `<!DOCTYPE html>
       data[0] = F75_EFFECT_CODES[s.effect] || 1;
       if (!s.rainbow) { data[1] = s.r; data[2] = s.g; data[3] = s.b; }
       data[9]  = s.brightness;
-      data[10] = 4 - s.speed;  // F75 speed is inverted
+      data[10] = 4 - s.speed;
       data[11] = s.direction;
-      await hidDevice.sendFeatureReport(0, data);
+      wi('applyRgbF75: sending RGB data');
+      await hidDevice.sendFeatureReport(0, data); wi('sent RGB data');
       await sleep(5);
 
-      await hidDevice.sendFeatureReport(0, f75ControlMsg(0x02));
+      await hidDevice.sendFeatureReport(0, f75ControlMsg(0x02)); wi('sent EndCommunication');
       await sleep(5);
-      await hidDevice.receiveFeatureReport(0);
+      await hidDevice.receiveFeatureReport(0); wi('received final ack');
+      wi('applyRgbF75: done');
     }
 
     async function applyTimeSyncF75(hidDevice) {
@@ -729,18 +780,26 @@ const html = `<!DOCTYPE html>
       }
       refreshBtn.disabled = true;
       refreshBtn.textContent = 'Scanning...';
+      wi('loadKeyboards: calling navigator.hid.getDevices()');
       navigator.hid.getDevices()
         .then(function(devices) {
-          var keyboards = devices.map(identifyDevice).filter(Boolean);
-          state.keyboards = keyboards;
+          wi('loadKeyboards: getDevices() returned ' + devices.length + ' device(s)');
           window.__hidDevices = {};
+          var keyboards = [];
           devices.forEach(function(d) {
             var info = identifyDevice(d);
-            if (info) window.__hidDevices[info.path] = d;
+            if (info) {
+              keyboards.push(info);
+              window.__hidDevices[info.path] = d;
+              wi('loadKeyboards: accepted -> ' + info.name + ' (path=' + info.path + ')');
+            }
           });
+          wi('loadKeyboards: ' + keyboards.length + ' supported keyboard(s) found');
+          state.keyboards = keyboards;
           renderSidebar();
           if (!state.selected && keyboards.length > 0) selectKeyboard(keyboards[0]);
         })
+        .catch(function(e) { we('loadKeyboards: getDevices() error: ' + e.message); })
         .finally(function() {
           refreshBtn.disabled = false;
           refreshBtn.textContent = '\u21BB Refresh';
@@ -752,11 +811,16 @@ const html = `<!DOCTYPE html>
       var filters = SUPPORTED_KEYBOARDS.map(function(kb) {
         return { vendorId: kb.vendorId, productId: kb.productId };
       });
+      wi('addKeyboard: calling requestDevice with ' + filters.length + ' filter(s)');
       navigator.hid.requestDevice({ filters: filters })
         .then(function(devices) {
+          wi('addKeyboard: requestDevice returned ' + devices.length + ' device(s)');
+          devices.forEach(function(d) {
+            wi('  -> VID=0x' + d.vendorId.toString(16) + ' PID=0x' + d.productId.toString(16) + ' name=' + (d.productName || '?'));
+          });
           if (devices.length > 0) loadKeyboards();
         })
-        .catch(function() { /* user cancelled */ });
+        .catch(function(e) { wi('addKeyboard: cancelled or error: ' + (e.message || e)); });
     }
 
     refreshBtn.addEventListener('click', loadKeyboards);
@@ -851,9 +915,12 @@ const html = `<!DOCTYPE html>
       if (!MOCK_MODE) {
         var raw = window.__hidDevices && window.__hidDevices[kb.path];
         if (raw) {
+          wi('selectKeyboard: opening device ' + kb.path);
           raw.open().then(function() {
             activeHidDevice = raw;
+            wi('selectKeyboard: device opened ok, opened=' + raw.opened);
           }).catch(function(e) {
+            we('selectKeyboard: open failed: ' + e.message);
             showStatus('\u2717 Failed to open device: ' + e.message, false);
           });
         }
@@ -927,7 +994,8 @@ const html = `<!DOCTYPE html>
         .catch(function(e) { showStatus('\u2717 Failed: ' + e.message, false); });
         return;
       }
-      if (!activeHidDevice) { showStatus('\u2717 No keyboard open', false); return; }
+      if (!activeHidDevice) { we('applyBtn: no activeHidDevice'); showStatus('\u2717 No keyboard open', false); return; }
+      wi('applyBtn: clicked, kind=' + state.selected.kind + ' device.opened=' + activeHidDevice.opened);
       var s = {
         r: parseInt(state.color.slice(1,3), 16),
         g: parseInt(state.color.slice(3,5), 16),
@@ -940,8 +1008,8 @@ const html = `<!DOCTYPE html>
       };
       var fn = (state.selected.kind === 'ak820') ? applyRgbAK820 : applyRgbF75;
       fn(activeHidDevice, s)
-        .then(function() { showStatus('\u2713 RGB applied.', true); })
-        .catch(function(e) { showStatus('\u2717 Failed: ' + e.message, false); });
+        .then(function() { wi('applyBtn: success'); showStatus('\u2713 RGB applied.', true); })
+        .catch(function(e) { we('applyBtn: error: ' + e.message + ' stack: ' + e.stack); showStatus('\u2717 Failed: ' + e.message, false); });
     });
 
     // ── Sync Time ─────────────────────────────────────────────────────────────
@@ -960,13 +1028,15 @@ const html = `<!DOCTYPE html>
         .catch(function(e) { showStatus('\u2717 Failed: ' + e.message, false); });
         return;
       }
-      if (!activeHidDevice) { showStatus('\u2717 No keyboard open', false); return; }
+      if (!activeHidDevice) { we('syncTimeBtn: no activeHidDevice'); showStatus('\u2717 No keyboard open', false); return; }
+      wi('syncTimeBtn: clicked, device.opened=' + activeHidDevice.opened);
       applyTimeSyncF75(activeHidDevice)
-        .then(function() { showStatus('\u2713 Time synced.', true); })
-        .catch(function(e) { showStatus('\u2717 Failed: ' + e.message, false); });
+        .then(function() { wi('syncTimeBtn: success'); showStatus('\u2713 Time synced.', true); })
+        .catch(function(e) { we('syncTimeBtn: error: ' + e.message); showStatus('\u2717 Failed: ' + e.message, false); });
     });
 
     // ── Bootstrap ─────────────────────────────────────────────────────────────
+    wi('page loaded, MOCK_MODE=' + MOCK_MODE + ', navigator.hid=' + (typeof navigator.hid));
     loadKeyboards();
   </script>
 </body>
@@ -992,6 +1062,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return new Response(html, {
       headers: { "content-type": "text/html; charset=utf-8" },
     });
+  }
+
+  // POST /api/log — webview sends logs here so they appear in openajazz.log
+  if (method === "POST" && pathname === "/api/log") {
+    try {
+      const body = await req.json() as { level: string; msg: string };
+      const line = `[webview:${body.level}] ${body.msg}`;
+      if (body.level === "error") logError(line); else log(line);
+    } catch { /* ignore malformed */ }
+    return Response.json({ ok: true });
   }
 
   // Mock-mode only routes — the webview uses these instead of WebHID when
