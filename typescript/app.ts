@@ -57,7 +57,7 @@ import {
 // These must be defined before node-hid is loaded so the lazy load below
 // can read MOCK_MODE and skip loading if not needed.
 
-const VERSION = "0.2.5";
+const VERSION = "0.2.8";
 const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 
 // ─── Lazy node-hid load ───────────────────────────────────────────────────────
@@ -927,14 +927,6 @@ const html = `<!DOCTYPE html>
       });
     });
 
-    // ── Shutdown on window close ──────────────────────────────────────────────────────────────
-    // sendBeacon is fire-and-forget and works reliably during page unload.
-    // The Deno server receives /api/exit and calls Deno.exit(0), preventing
-    // Deno.serve() from keeping the process alive after the window closes.
-    window.addEventListener('unload', function() {
-      navigator.sendBeacon('/api/exit');
-    });
-
     // ── Bootstrap ──────────────────────────────────────────────────────────────────────────────
     fetch('/api/keyboards')
       .then(function(res) { return res.json(); })
@@ -1052,16 +1044,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
       logError("[openajazz] time: FAILED", e.message, e.stack ?? "");
       return Response.json({ ok: false, error: e.message }, { status: 500 });
     }
-  }
-
-  // POST /api/exit — called by the webview on unload to shut down the server
-  if (method === "POST" && pathname === "/api/exit") {
-    log("[openajazz] /api/exit received, shutting down.");
-    if (openKeyboard) {
-      try { openKeyboard.device.close(); } catch { /* ignore */ }
-    }
-    setTimeout(() => Deno.exit(0), 50);
-    return Response.json({ ok: true });
   }
 
   logWarn("[openajazz] 404:", method, pathname);
