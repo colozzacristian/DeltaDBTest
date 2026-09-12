@@ -4,7 +4,16 @@
 // Writes every log line to openajazz.log next to the binary so logs are
 // always available even when the terminal doesn't show stdout (e.g. Windows).
 
-const LOG_FILE = "openajazz.log";
+// Write log next to the binary (Deno.execPath()) so it's always findable
+// regardless of the working directory when the app is launched.
+const _execDir = (() => {
+  try {
+    const p = Deno.execPath();
+    const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    return i >= 0 ? p.slice(0, i) : ".";
+  } catch { return "."; }
+})();
+const LOG_FILE = `${_execDir}/openajazz.log`;
 try { Deno.removeSync(LOG_FILE); } catch { /* first run */ }
 
 function log(...args: unknown[]) {
@@ -48,7 +57,7 @@ import {
 // These must be defined before node-hid is loaded so the lazy load below
 // can read MOCK_MODE and skip loading if not needed.
 
-const VERSION = "0.2.4";
+const VERSION = "0.2.5";
 const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 
 // ─── Lazy node-hid load ───────────────────────────────────────────────────────
@@ -57,18 +66,24 @@ const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 // dynamic-import it instead so failure is caught and the app still starts in a
 // “no keyboard” state rather than crashing.
 
+log(`[openajazz] v${VERSION} | platform: ${Deno.build.os} | mock: ${MOCK_MODE}`);
+
 let HID: any = null;
-if (!MOCK_MODE) {
+
+// Load node-hid in the background so Deno.serve() starts immediately and the
+// webview doesn't time out waiting for the server. In compiled binaries
+// without node_modules on disk the import throws a JS error and HID stays null
+// (real keyboard support requires `deno task dev:real`).
+(async () => {
+  if (MOCK_MODE) return;
   try {
     HID = (await import("npm:node-hid")).default;
-    log(`[openajazz] v${VERSION} | node-hid loaded | platform: ${Deno.build.os}`);
+    log("[openajazz] node-hid loaded");
   } catch (e: any) {
-    logWarn(`[openajazz] v${VERSION} | node-hid unavailable: ${e.message}`);
-    logWarn("[openajazz] Real keyboard support disabled. Use OPENAJAZZ_MOCK=1 for mock mode.");
+    logWarn("[openajazz] node-hid unavailable:", e.message);
+    logWarn("[openajazz] Run via `deno task dev:real` for real keyboard support.");
   }
-} else {
-  log(`[openajazz] v${VERSION} | mock mode | platform: ${Deno.build.os}`);
-}
+})();
 
 // ─── Supported keyboard definitions (for real HID discovery) ─────────────────
 
