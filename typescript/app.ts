@@ -1,5 +1,4 @@
 // deno-lint-ignore-file no-explicit-any
-import HID from "npm:node-hid";
 import {
   Brightness,
   Color,
@@ -18,6 +17,32 @@ import {
   openFeatureDevice,
   openOutputDevice,
 } from "./src/nodehid.ts";
+
+// ─── Mode & version ────────────────────────────────────────────────────────────
+// These must be defined before node-hid is loaded so the lazy load below
+// can read MOCK_MODE and skip loading if not needed.
+
+const VERSION = "0.2.2";
+const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
+
+// ─── Lazy node-hid load ───────────────────────────────────────────────────────
+// node-hid ships a native .node binary. A static import crashes compiled
+// binaries (AppImage / MSI) that don’t have node_modules on disk. We
+// dynamic-import it instead so failure is caught and the app still starts in a
+// “no keyboard” state rather than crashing.
+
+let HID: any = null;
+if (!MOCK_MODE) {
+  try {
+    HID = (await import("npm:node-hid")).default;
+    console.log(`[openajazz] v${VERSION} | node-hid loaded | platform: ${Deno.build.os}`);
+  } catch (e: any) {
+    console.warn(`[openajazz] v${VERSION} | node-hid unavailable: ${e.message}`);
+    console.warn("[openajazz] Real keyboard support disabled. Use OPENAJAZZ_MOCK=1 for mock mode.");
+  }
+} else {
+  console.log(`[openajazz] v${VERSION} | mock mode | platform: ${Deno.build.os}`);
+}
 
 // ─── Supported keyboard definitions (for real HID discovery) ─────────────────
 
@@ -64,14 +89,26 @@ interface OpenKeyboard {
 let openKeyboard: OpenKeyboard | null = null;
 
 function discoverKeyboards() {
-  const all = (HID as any).devices() as any[];
-  return SUPPORTED.flatMap((s) =>
+  if (!HID) return [];
+  const all = HID.devices() as any[];
+  console.log(`[openajazz] HID scan: ${all.length} total devices`);
+
+  // Log every device so mismatches are visible in the terminal
+  for (const d of all) {
+    const vid = `0x${d.vendorId?.toString(16).padStart(4, "0")}`;
+    const pid = `0x${d.productId?.toString(16).padStart(4, "0")}`;
+    const up  = `0x${d.usagePage?.toString(16).padStart(4, "0")}`;
+    console.log(`[openajazz]   VID:${vid} PID:${pid} usagePage:${up} path:${d.path ?? "(none)"}`);
+  }
+
+  const found = SUPPORTED.flatMap((s) =>
     all
       .filter(
         (d) =>
           d.vendorId === s.vendorId &&
           d.productId === s.productId &&
-          d.usagePage === s.usagePage &&
+          // usagePage can be 0 on Linux hidraw — fall back to VID+PID only
+          (d.usagePage === 0 || d.usagePage === s.usagePage) &&
           d.path,
       )
       .map((d) => ({
@@ -83,15 +120,20 @@ function discoverKeyboards() {
         mock: false,
       }))
   );
+
+  console.log(`[openajazz] Found ${found.length} supported keyboard(s): ${found.map(k => k.name).join(", ") || "none"}`);
+  return found;
 }
 
 function connectReal(path: string): void {
+  if (!HID) throw new Error("node-hid is not available on this system.");
+
   if (openKeyboard) {
     try { openKeyboard.device.close(); } catch { /* ignore */ }
     openKeyboard = null;
   }
 
-  const all = (HID as any).devices() as any[];
+  const all = HID.devices() as any[];
   const info = all.find((d: any) => d.path === path);
   if (!info) throw new Error(`Device not found: ${path}`);
 
@@ -104,8 +146,8 @@ function connectReal(path: string): void {
   if (!supported) throw new Error(`Unsupported keyboard at ${path}`);
 
   const device = supported.reportType === "output"
-    ? openOutputDevice(path)
-    : openFeatureDevice(path);
+    ? openOutputDevice(HID, path)
+    : openFeatureDevice(HID, path);
 
   const keyboard = createKeyboard(
     info.vendorId,
@@ -154,15 +196,6 @@ const MOCK_KEYBOARDS: MockKeyboard[] = [
   { path: "mock-ak35i",  name: "AK35I",   manufacturer: "AJAZZ", kind: "ak35i",   features: { rgb: true, timeSync: true  }, mock: true },
   { path: "mock-f75max", name: "F75 Max", manufacturer: "Aula",  kind: "f75_max", features: { rgb: true, timeSync: true  }, mock: true },
 ];
-
-// When OPENAJAZZ_MOCK=1 (or no real keyboard found) the server returns the mock
-// keyboard list and silently swallows HID writes. Set automatically by
-// `deno task dev:mock`; in `deno task dev` real HID is attempted instead.
-const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
-
-// ─── Package version (kept in sync with deno.json) ───────────────────────────
-
-const VERSION = "0.2.1";
 
 // ─── Frontend HTML ────────────────────────────────────────────────────────────
 // All JS inside the template literal uses plain functions and string
@@ -879,6 +912,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // GET / — serve the full HTML application
   if (method === "GET" && pathname === "/") {
+    console.log("[openajazz] Serving UI");
     return new Response(html, {
       headers: { "content-type": "text/html; charset=utf-8" },
     });
@@ -886,10 +920,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // GET /api/keyboards — list detected keyboards (real or mock)
   if (method === "GET" && pathname === "/api/keyboards") {
-    if (MOCK_MODE) return Response.json(MOCK_KEYBOARDS);
+    if (MOCK_MODE) {
+      console.log("[openajazz] keyboards: returning mock list");
+      return Response.json(MOCK_KEYBOARDS);
+    }
     try {
-      return Response.json(discoverKeyboards());
+      const keyboards = discoverKeyboards();
+      return Response.json(keyboards);
     } catch (e: any) {
+      console.error("[openajazz] keyboards: discovery error:", e.message);
       return Response.json({ error: e.message }, { status: 500 });
     }
   }
@@ -898,14 +937,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (method === "POST" && pathname === "/api/connect") {
     const body = await req.json() as { path: string };
     if (MOCK_MODE) {
-      console.log("[mock] connected:", body.path);
+      console.log("[openajazz] connect: mock", body.path);
       return Response.json({ ok: true });
     }
+    console.log("[openajazz] connect: opening", body.path);
     try {
       connectReal(body.path);
-      console.log("[hid] connected:", body.path);
+      console.log("[openajazz] connect: OK ", body.path);
       return Response.json({ ok: true });
     } catch (e: any) {
+      console.error("[openajazz] connect: FAILED", e.message);
       return Response.json({ ok: false, error: e.message }, { status: 500 });
     }
   }
@@ -916,7 +957,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       try { openKeyboard.device.close(); } catch { /* ignore */ }
       openKeyboard = null;
     }
-    console.log(MOCK_MODE ? "[mock]" : "[hid]", "disconnected");
+    console.log("[openajazz] disconnect");
     return Response.json({ ok: true });
   }
 
@@ -924,18 +965,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (method === "POST" && pathname === "/api/rgb") {
     const body = await req.json();
     if (MOCK_MODE) {
-      console.log("[mock] rgb:", body);
+      console.log("[openajazz] rgb: mock", JSON.stringify(body));
       return Response.json({ ok: true });
     }
     if (!openKeyboard) {
+      console.warn("[openajazz] rgb: no keyboard connected");
       return Response.json({ ok: false, error: "No keyboard connected" }, { status: 400 });
     }
+    console.log("[openajazz] rgb: sending", JSON.stringify(body));
     try {
       await writeRgbInto(parseRgb(body), openKeyboard.keyboard);
-      console.log("[hid] rgb applied");
+      console.log("[openajazz] rgb: OK");
       return Response.json({ ok: true });
     } catch (e: any) {
-      console.error("[hid] rgb error:", e.message);
+      console.error("[openajazz] rgb: FAILED", e.message, e.stack);
       return Response.json({ ok: false, error: e.message }, { status: 500 });
     }
   }
@@ -943,25 +986,30 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // POST /api/time — sync clock to keyboard
   if (method === "POST" && pathname === "/api/time") {
     if (MOCK_MODE) {
-      console.log("[mock] time sync");
+      console.log("[openajazz] time: mock");
       return Response.json({ ok: true, time: new Date().toISOString() });
     }
     if (!openKeyboard) {
+      console.warn("[openajazz] time: no keyboard connected");
       return Response.json({ ok: false, error: "No keyboard connected" }, { status: 400 });
     }
+    console.log("[openajazz] time: syncing");
     try {
       await writeTimeSyncInto({ dateTime: new Date() }, openKeyboard.keyboard);
       const time = new Date().toISOString();
-      console.log("[hid] time synced:", time);
+      console.log("[openajazz] time: OK", time);
       return Response.json({ ok: true, time });
     } catch (e: any) {
-      console.error("[hid] time error:", e.message);
+      console.error("[openajazz] time: FAILED", e.message, e.stack);
       return Response.json({ ok: false, error: e.message }, { status: 500 });
     }
   }
 
+  console.warn("[openajazz] 404:", method, pathname);
   return new Response("Not Found", { status: 404 });
 });
+
+console.log("[openajazz] Server started. Window opening...");
 
 // ─── Window lifecycle ─────────────────────────────────────────────────────────
 
@@ -971,12 +1019,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
 // Without this, Deno.serve() keeps the process alive after the window closes.
 try {
   const win = new (Deno as any).BrowserWindow({ title: "openajazz" });
+  console.log("[openajazz] Window created, windowId:", win.windowId);
   win.addEventListener("close", () => {
+    console.log("[openajazz] Window closed, exiting.");
     if (openKeyboard) {
       try { openKeyboard.device.close(); } catch { /* ignore */ }
     }
     Deno.exit(0);
   });
-} catch {
+} catch (e: any) {
   // Not running inside deno desktop — dev mode via `deno run`, ignore.
+  console.log("[openajazz] BrowserWindow not available (dev mode):", e.message);
 }

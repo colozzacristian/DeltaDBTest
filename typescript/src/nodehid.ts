@@ -1,17 +1,19 @@
 // deno-lint-ignore-file no-explicit-any
-import HID from "npm:node-hid";
+// Note: node-hid is NOT statically imported here. The caller lazy-loads it and
+// passes it in so the module never crashes on import in compiled binaries where
+// the native .node file is not on disk.
 import { KeyboardDevice } from "./types.ts";
 
 // ─── Open helpers ───────────────────────────────────────────────────────────────
 
 /** Open a keyboard that uses standard Output Reports (AK820). */
-export function openOutputDevice(path: string): NodeHIDOutputDevice {
-  return new NodeHIDOutputDevice(new (HID as any).HID(path));
+export function openOutputDevice(hid: any, path: string): NodeHIDOutputDevice {
+  return new NodeHIDOutputDevice(new hid.HID(path));
 }
 
 /** Open a keyboard that uses Feature Reports (AK35i, F75 Max). */
-export function openFeatureDevice(path: string): NodeHIDFeatureDevice {
-  return new NodeHIDFeatureDevice(new (HID as any).HID(path));
+export function openFeatureDevice(hid: any, path: string): NodeHIDFeatureDevice {
+  return new NodeHIDFeatureDevice(new hid.HID(path));
 }
 
 // ─── Adapters ───────────────────────────────────────────────────────────────────
