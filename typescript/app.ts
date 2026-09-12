@@ -57,7 +57,7 @@ import {
 // These must be defined before node-hid is loaded so the lazy load below
 // can read MOCK_MODE and skip loading if not needed.
 
-const VERSION = "0.2.8";
+const VERSION = "0.2.9";
 const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 
 // ─── Lazy node-hid load ───────────────────────────────────────────────────────
@@ -66,24 +66,27 @@ const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 // dynamic-import it instead so failure is caught and the app still starts in a
 // “no keyboard” state rather than crashing.
 
-log(`[openajazz] v${VERSION} | platform: ${Deno.build.os} | mock: ${MOCK_MODE}`);
+// Real HID support requires an explicit opt-in so compiled binaries never
+// attempt to load the native node-hid binary (which crashes on Windows due to
+// its USB monitoring threads). Set OPENAJAZZ_HID=1 only in `deno task dev:real`.
+const HID_ENABLED = !MOCK_MODE && Deno.env.get("OPENAJAZZ_HID") === "1";
+
+log(`[openajazz] v${VERSION} | platform: ${Deno.build.os} | mock: ${MOCK_MODE} | hid: ${HID_ENABLED}`);
 
 let HID: any = null;
 
-// Load node-hid in the background so Deno.serve() starts immediately and the
-// webview doesn't time out waiting for the server. In compiled binaries
-// without node_modules on disk the import throws a JS error and HID stays null
-// (real keyboard support requires `deno task dev:real`).
-(async () => {
-  if (MOCK_MODE) return;
-  try {
-    HID = (await import("npm:node-hid")).default;
-    log("[openajazz] node-hid loaded");
-  } catch (e: any) {
-    logWarn("[openajazz] node-hid unavailable:", e.message);
-    logWarn("[openajazz] Run via `deno task dev:real` for real keyboard support.");
-  }
-})();
+if (HID_ENABLED) {
+  (async () => {
+    try {
+      HID = (await import("npm:node-hid")).default;
+      log("[openajazz] node-hid loaded");
+    } catch (e: any) {
+      logWarn("[openajazz] node-hid unavailable:", e.message);
+    }
+  })();
+} else if (!MOCK_MODE) {
+  log("[openajazz] HID disabled in compiled binary. Use `deno task dev:real` for keyboard support.");
+}
 
 // ─── Supported keyboard definitions (for real HID discovery) ─────────────────
 
