@@ -12,12 +12,11 @@
     "strict": true,
     "lib": ["deno.window", "dom"]
   },
-  "nodeModulesDir": "auto",
   "tasks": {
-    "dev": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --allow-ffi --node-modules-dir=auto --hmr app.ts",
+    "dev": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --allow-ffi --hmr app.ts",
     "dev:real": "deno desktop --allow-env --allow-ffi --allow-read --node-modules-dir=auto --hmr app.ts",
-    "build": "deno desktop --allow-env --allow-ffi --node-modules-dir=auto app.ts",
-    "build:mock": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --allow-ffi --node-modules-dir=auto app.ts"
+    "build": "deno desktop --allow-env --allow-ffi app.ts",
+    "build:mock": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --allow-ffi app.ts"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@1"
