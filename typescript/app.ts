@@ -57,7 +57,7 @@ import {
 // These must be defined before node-hid is loaded so the lazy load below
 // can read MOCK_MODE and skip loading if not needed.
 
-const VERSION = "0.2.9";
+const VERSION = "0.2.10";
 const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 
 // ─── Lazy node-hid load ───────────────────────────────────────────────────────
@@ -66,26 +66,20 @@ const MOCK_MODE = Deno.env.get("OPENAJAZZ_MOCK") === "1";
 // dynamic-import it instead so failure is caught and the app still starts in a
 // “no keyboard” state rather than crashing.
 
-// Real HID support requires an explicit opt-in so compiled binaries never
-// attempt to load the native node-hid binary (which crashes on Windows due to
-// its USB monitoring threads). Set OPENAJAZZ_HID=1 only in `deno task dev:real`.
-const HID_ENABLED = !MOCK_MODE && Deno.env.get("OPENAJAZZ_HID") === "1";
-
-log(`[openajazz] v${VERSION} | platform: ${Deno.build.os} | mock: ${MOCK_MODE} | hid: ${HID_ENABLED}`);
+log(`[openajazz] v${VERSION} | platform: ${Deno.build.os} | mock: ${MOCK_MODE}`);
 
 let HID: any = null;
 
-if (HID_ENABLED) {
+if (!MOCK_MODE) {
   (async () => {
     try {
       HID = (await import("npm:node-hid")).default;
-      log("[openajazz] node-hid loaded");
+      log("[openajazz] node-hid loaded successfully");
     } catch (e: any) {
-      logWarn("[openajazz] node-hid unavailable:", e.message);
+      logWarn("[openajazz] node-hid failed to load:", e.message);
+      logWarn("[openajazz] Keyboard discovery unavailable.");
     }
   })();
-} else if (!MOCK_MODE) {
-  log("[openajazz] HID disabled in compiled binary. Use `deno task dev:real` for keyboard support.");
 }
 
 // ─── Supported keyboard definitions (for real HID discovery) ─────────────────
@@ -619,13 +613,14 @@ const html = `<!DOCTYPE html>
     <aside class="sidebar">
       <div class="sidebar-heading">Keyboards</div>
       <div id="kb-list"></div>
+      <button class="btn" id="refresh-btn" style="margin-top:auto;width:100%">&#x21BB; Refresh</button>
     </aside>
 
     <!-- Main content -->
     <main class="content">
       <div class="empty-state" id="empty-state">
         <div class="empty-state-icon">&#x2328;</div>
-        <div>Select a keyboard from the sidebar</div>
+        <div id="empty-state-msg">No keyboards found</div>
       </div>
 
       <div class="controls-panel" id="controls-panel" style="display:none">
@@ -747,6 +742,8 @@ const html = `<!DOCTYPE html>
     var syncTimeBtn    = document.getElementById('sync-time-btn');
     var applyBtn       = document.getElementById('apply-btn');
     var statusBar      = document.getElementById('status-bar');
+    var refreshBtn     = document.getElementById('refresh-btn');
+    var emptyMsg       = document.getElementById('empty-state-msg');
 
     var statusTimer = null;
 
@@ -764,9 +761,38 @@ const html = `<!DOCTYPE html>
       }, 3000);
     }
 
-    // ── Sidebar ────────────────────────────────────────────────────────────────
+    // ── Sidebar ──────────────────────────────────────────────────────────────────────────────
+    function loadKeyboards() {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Scanning...';
+      fetch('/api/keyboards')
+        .then(function(res) { return res.json(); })
+        .then(function(keyboards) {
+          state.keyboards = keyboards;
+          renderSidebar();
+          if (!state.selected && keyboards.length > 0) {
+            selectKeyboard(keyboards[0]);
+          }
+        })
+        .catch(function(e) {
+          console.error('Discovery failed:', e);
+        })
+        .finally(function() {
+          refreshBtn.disabled = false;
+          refreshBtn.textContent = '\u21BB Refresh';
+        });
+    }
+
+    refreshBtn.addEventListener('click', loadKeyboards);
+
     function renderSidebar() {
       kbList.innerHTML = '';
+      if (state.keyboards.length === 0) {
+        var msg = emptyMsg;
+        msg.textContent = 'No supported keyboards found. Plug in your keyboard and click Refresh.';
+      } else {
+        emptyMsg.textContent = 'Select a keyboard from the sidebar';
+      }
       state.keyboards.forEach(function(kb) {
         var btn = document.createElement('button');
         var isActive = state.selected && state.selected.path === kb.path;
@@ -931,18 +957,7 @@ const html = `<!DOCTYPE html>
     });
 
     // ── Bootstrap ──────────────────────────────────────────────────────────────────────────────
-    fetch('/api/keyboards')
-      .then(function(res) { return res.json(); })
-      .then(function(keyboards) {
-        state.keyboards = keyboards;
-        renderSidebar();
-        if (keyboards.length > 0) {
-          selectKeyboard(keyboards[0]);
-        }
-      })
-      .catch(function(e) {
-        console.error('Failed to load keyboards:', e);
-      });
+    loadKeyboards();
   </script>
 </body>
 </html>`;
@@ -953,6 +968,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const url = new URL(req.url);
   const { pathname } = url;
   const method = req.method;
+
+  // GET /favicon.ico — suppress 404 noise in logs
+  if (method === "GET" && pathname === "/favicon.ico") {
+    return new Response(null, { status: 204 });
+  }
 
   // GET / — serve the full HTML application
   if (method === "GET" && pathname === "/") {
@@ -965,8 +985,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // GET /api/keyboards — list detected keyboards (real or mock)
   if (method === "GET" && pathname === "/api/keyboards") {
     if (MOCK_MODE) {
-      log("[openajazz] keyboards: returning mock list");
+      log("[openajazz] keyboards: mock mode, returning", MOCK_KEYBOARDS.length, "mock keyboards:", MOCK_KEYBOARDS.map(k => k.name).join(", "));
       return Response.json(MOCK_KEYBOARDS);
+    }
+    if (!HID) {
+      log("[openajazz] keyboards: node-hid not yet loaded (still initialising) — returning empty list");
+      return Response.json([]);
     }
     try {
       const keyboards = discoverKeyboards();

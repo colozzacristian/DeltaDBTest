@@ -1,6 +1,6 @@
 {
   "name": "@openajazz/jazztastic",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "exports": "./src/index.ts",
   "desktop": {
     "app": {
@@ -12,9 +12,10 @@
     "strict": true,
     "lib": ["deno.window", "dom"]
   },
+  "nodeModulesDir": "auto",
   "tasks": {
     "dev": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --allow-ffi --hmr app.ts",
-    "dev:real": "OPENAJAZZ_HID=1 deno desktop --allow-env --allow-ffi --allow-read --node-modules-dir=auto --hmr app.ts",
+    "dev:real": "deno desktop --allow-env --allow-ffi --allow-read --node-modules-dir=auto --hmr app.ts",
     "build": "deno desktop --allow-env --allow-ffi app.ts",
     "build:mock": "OPENAJAZZ_MOCK=1 deno desktop --allow-env --allow-ffi app.ts"
   },

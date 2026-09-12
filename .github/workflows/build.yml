@@ -76,6 +76,8 @@ jobs:
         run: |
           cd typescript
           deno desktop --allow-env --allow-read --allow-write --allow-ffi \
+            --node-modules-dir=auto \
+            --allow-scripts=npm:node-hid \
             --backend ${{ matrix.backend }} \
             --target ${{ matrix.target }} \
             --output ${{ matrix.output }} \
@@ -87,6 +89,8 @@ jobs:
         run: |
           cd typescript
           deno desktop --allow-env --allow-read --allow-write --allow-ffi \
+            --node-modules-dir=auto \
+            --allow-scripts=npm:node-hid \
             --backend webview \
             --target x86_64-pc-windows-msvc \
             --output openajazz-windows-x86_64-portable \
